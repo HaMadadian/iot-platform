@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>IoT Platform</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f4f6f9;
+            margin: 0;
+            padding: 0;
+            color: #333;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 50px auto;
+            background: white;
+            padding: 40px;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+        }
+
+        h1 {
+            color: #1a73e8;
+            margin-bottom: 10px;
+        }
+
+        .version {
+            color: #666;
+            font-size: 14px;
+            margin-bottom: 30px;
+        }
+
+        .card {
+            background: #f8f9fa;
+            border-left: 5px solid #1a73e8;
+            padding: 20px;
+            margin-bottom: 20px;
+            border-radius: 6px;
+        }
+
+        .card h3 {
+            margin-top: 0;
+            color: #1a73e8;
+        }
+
+        a.button {
+            display: inline-block;
+            background-color: #1a73e8;
+            color: white;
+            padding: 12px 24px;
+            text-decoration: none;
+            border-radius: 6px;
+            margin-right: 12px;
+            margin-top: 10px;
+            font-weight: 500;
+        }
+
+        a.button:hover {
+            background-color: #1557b0;
+        }
+
+        ul {
+            line-height: 1.7;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>IoT Data Platform</h1>
+        <div class="version">Version {{ version }}</div>
+
+        <div class="card">
+            <h3>What is this platform?</h3>
+            <p>
+                This is a flexible IoT platform that receives data from field devices,
+                stores it securely, and provides tools for visualization and data export.
+            </p>
+        </div>
+
+        <div class="card">
+            <h3>Available Sections</h3>
+            <ul>
+                <li><strong>Devices</strong> – View all devices that have sent data and open live dashboards</li>
+                <li><strong>Swagger API</strong> – Interactive documentation and testing of all API endpoints</li>
+            </ul>
+        </div>
+
+        <a href="/devices" class="button">View Devices</a>
+        <a href="/swagger" class="button">Open Swagger API</a>
+    </div>
+</body>
+
+</html>
