@@ -16,9 +16,9 @@ load_dotenv()
 app = Flask(__name__)
 auth = HTTPBasicAuth()
 
-APP_VERSION = "0.2.0"
+APP_VERSION = "0.3.0"
 
-# ---------- Database ----------
+# ---------- Database Configuration ----------
 database_url = os.getenv("DATABASE_URL")
 
 # Render sometimes gives postgres:// — SQLAlchemy needs postgresql://
@@ -28,6 +28,28 @@ if database_url and database_url.startswith("postgres://"):
 app.config["SQLALCHEMY_DATABASE_URI"] = database_url or "sqlite:///iot.db"
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 db = SQLAlchemy(app)
+
+
+# ---------- Models ----------
+class Device(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    device_id = db.Column(db.String(50), unique=True, nullable=False, index=True)
+    name = db.Column(db.String(100), nullable=False)
+    description = db.Column(db.String(255))
+    location = db.Column(db.String(100))
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "device_id": self.device_id,
+            "name": self.name,
+            "description": self.description,
+            "location": self.location,
+            "is_active": self.is_active,
+            "created_at": self.created_at.isoformat() if self.created_at else None
+        }
 
 
 class Measurement(db.Model):
@@ -58,7 +80,6 @@ def verify_password(username, password):
 
 @app.before_request
 def require_authentication():
-    # Correct way to protect all routes
     if not auth.current_user():
         return auth.login_required(lambda: None)()
 
@@ -70,19 +91,20 @@ def get_temperature(measurement):
     return None
 
 
-# ---------- API ----------
+# ---------- API Setup ----------
 api = Api(
     app,
     version=APP_VERSION,
     title="IoT Platform API",
     description="""
     **IoT Data Platform**
-    
+
     This API allows IoT devices to send sensor measurements and provides tools to explore and export the data.
-    
+
     ### Main Features:
     - Receive flexible sensor data (JSON)
     - Store both device-side and server-side timestamps
+    - Device registry
     - Real-time visualization
     - CSV export with date filtering
     """,
@@ -90,40 +112,28 @@ api = Api(
     prefix="/api"
 )
 
+# ---------- Input Models ----------
 measurement_input = api.model("MeasurementInput", {
     "device_id": fields.String(required=True, example="device_001"),
     "sensor_type": fields.String(required=True, example="temperature"),
     "device_unix_time": fields.Integer(required=True, example=1726000000),
-    "device_local_time": fields.String(required=True, example="2026-09-11 14:00:00"),
+    "device_local_time": fields.String(required=True, example="2026-09-15 00:00:00"),
     "data": fields.Raw(required=True, example={"temperature": 23.5})
 })
 
+device_input = api.model("DeviceInput", {
+    "device_id": fields.String(required=True, example="device_001"),
+    "name": fields.String(required=True, example="Warehouse Temperature Sensor"),
+    "description": fields.String(example="Sensor located in the main warehouse"),
+    "location": fields.String(example="Building A - Zone 3")
+})
 
+
+# ---------- Measurements Endpoints ----------
 @api.route("/measurements")
 class Measurements(Resource):
     @api.expect(measurement_input)
-    @api.doc(
-        description="""
-        **Receive a new measurement from an IoT device**
-
-        This is the main endpoint that field devices should call to send sensor data.
-
-        ### Required fields:
-        - `device_id`: Unique identifier of the device
-        - `sensor_type`: Type of sensor (e.g. temperature, weather, energy)
-        - `device_unix_time`: Unix timestamp when the measurement was taken on the device
-        - `device_local_time`: Local datetime string when the measurement was taken on the device
-        - `data`: JSON object containing the actual measured values (flexible structure)
-
-        The server will automatically add:
-        - Server reception Unix timestamp
-        - Server reception local timestamp
-        """,
-        responses={
-            201: "Measurement successfully stored",
-            400: "Missing required fields"
-        }
-    )
+    @api.doc(description="Receive a new measurement from an IoT device")
     def post(self):
         """Receive measurement from an IoT device"""
         payload = request.get_json()
@@ -150,33 +160,113 @@ class Measurements(Resource):
         return {"message": "Measurement stored successfully", "id": measurement.id}, 201
 
 
+@api.route("/measurements/<int:measurement_id>")
+class MeasurementDetail(Resource):
+    @api.doc(description="Delete a specific measurement by ID")
+    def delete(self, measurement_id):
+        """Delete a single measurement"""
+        measurement = Measurement.query.get(measurement_id)
+        if not measurement:
+            api.abort(404, f"Measurement with ID {measurement_id} not found")
+
+        db.session.delete(measurement)
+        db.session.commit()
+        return {"message": f"Measurement {measurement_id} deleted successfully"}, 200
+
+
+# ---------- Devices Endpoints ----------
+@api.route("/devices")
+class DeviceList(Resource):
+    @api.doc(description="List all registered devices")
+    def get(self):
+        """Get all devices"""
+        devices = Device.query.order_by(Device.created_at.desc()).all()
+        return {
+            "count": len(devices),
+            "devices": [d.to_dict() for d in devices]
+        }
+
+    @api.expect(device_input)
+    @api.doc(description="Register a new device")
+    def post(self):
+        """Register a new device"""
+        data = request.get_json()
+
+        if not data.get("device_id") or not data.get("name"):
+            api.abort(400, "device_id and name are required")
+
+        existing = Device.query.filter_by(device_id=data["device_id"]).first()
+        if existing:
+            api.abort(400, f"Device '{data['device_id']}' already exists")
+
+        device = Device(
+            device_id=data["device_id"],
+            name=data["name"],
+            description=data.get("description"),
+            location=data.get("location"),
+            is_active=True
+        )
+
+        db.session.add(device)
+        db.session.commit()
+        return device.to_dict(), 201
+
+
+@api.route("/devices/<string:device_id>")
+class DeviceDetail(Resource):
+    @api.doc(description="Get details of a specific device")
+    def get(self, device_id):
+        """Get one device"""
+        device = Device.query.filter_by(device_id=device_id).first_or_404(
+            description=f"Device '{device_id}' not found"
+        )
+        return device.to_dict()
+
+    @api.doc(description="Deactivate a device")
+    def delete(self, device_id):
+        """Deactivate a device"""
+        device = Device.query.filter_by(device_id=device_id).first_or_404(
+            description=f"Device '{device_id}' not found"
+        )
+        device.is_active = False
+        db.session.commit()
+        return {"message": f"Device '{device_id}' has been deactivated"}
+
+
+@api.route("/devices/<string:device_id>/latest")
+class DeviceLatest(Resource):
+    @api.doc(description="Get the latest measurement of a specific device")
+    def get(self, device_id):
+        """Get the most recent measurement of a device"""
+        measurement = (Measurement.query
+                       .filter_by(device_id=device_id)
+                       .order_by(Measurement.server_unix_time.desc())
+                       .first())
+
+        if not measurement:
+            api.abort(404, f"No measurements found for device '{device_id}'")
+
+        return {
+            "id": measurement.id,
+            "device_id": measurement.device_id,
+            "sensor_type": measurement.sensor_type,
+            "device_unix_time": measurement.device_unix_time,
+            "device_local_time": measurement.device_local_time,
+            "server_unix_time": measurement.server_unix_time,
+            "server_local_time": measurement.server_local_time,
+            "data": measurement.data
+        }
+
+
 @api.route("/devices/<string:device_id>/plot-data")
 class DevicePlotData(Resource):
-    @api.doc(
-        description="""
-        **Get data for the real-time temperature plot**
-
-        Returns the latest temperature readings for a specific device.
-        This endpoint is used by the live dashboard page to draw the interactive graph.
-
-        ### Response format:
-        - `times`: List of server timestamps
-        - `values`: List of temperature values
-        - `hover_texts`: List of detailed hover information for each point
-        """,
-        params={
-            "device_id": "The unique ID of the device (example: device_001)"
-        }
-    )
+    @api.doc(description="Get data for the real-time temperature plot")
     def get(self, device_id):
-        """Get latest temperature data for interactive plot"""
-        today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        """Data for the interactive real-time plot"""
         measurements = (Measurement.query
-                        .filter(
-                            Measurement.device_id == device_id,
-                            Measurement.device_unix_time >= int(today_start.timestamp())
-                        )
-                        .order_by(Measurement.device_unix_time.desc())
+                        .filter_by(device_id=device_id)
+                        .order_by(Measurement.server_unix_time.desc())
+                        .limit(100)
                         .all())
 
         measurements = list(reversed(measurements))
@@ -207,28 +297,14 @@ class DevicePlotData(Resource):
 @api.route("/devices/<string:device_id>/csv")
 class DeviceCSV(Resource):
     @api.doc(
-        description="""
-        **Download measurement data as CSV**
-
-        Exports all measurements of a specific device within an optional time range.
-
-        ### Query Parameters:
-        - `start` (optional): Start datetime (format: YYYY-MM-DD HH:MM:SS)
-        - `end` (optional): End datetime (format: YYYY-MM-DD HH:MM:SS)
-
-        If `start` and `end` are not provided, all available data for the device will be downloaded.
-
-        ### Example:
-        `/api/devices/device_001/csv?start=2026-09-11 10:00:00&end=2026-09-11 18:00:00`
-        """,
+        description="Download measurement data as CSV",
         params={
-            "device_id": "The unique ID of the device",
             "start": "Start datetime (example: 2026-09-11 10:00:00)",
             "end": "End datetime (example: 2026-09-11 18:00:00)"
         }
     )
     def get(self, device_id):
-        """Download CSV file for a device"""
+        """Download CSV for a device"""
         start = request.args.get("start")
         end = request.args.get("end")
 
@@ -253,13 +329,9 @@ class DeviceCSV(Resource):
 
         for m in measurements:
             writer.writerow([
-                m.id,
-                m.device_id,
-                m.sensor_type,
-                m.device_unix_time,
-                m.device_local_time,
-                m.server_unix_time,
-                m.server_local_time,
+                m.id, m.device_id, m.sensor_type,
+                m.device_unix_time, m.device_local_time,
+                m.server_unix_time, m.server_local_time,
                 str(m.data)
             ])
 
@@ -268,133 +340,24 @@ class DeviceCSV(Resource):
         return Response(
             output.getvalue(),
             mimetype="text/csv",
-            headers={
-                "Content-Disposition": f"attachment; filename={device_id}_data.csv"
-            }
+            headers={"Content-Disposition": f"attachment; filename={device_id}_data.csv"}
         )
-
-@api.route("/devices")
-class DeviceList(Resource):
-    @api.doc(
-        description="""
-        **List all devices that have sent data**
-
-        Returns a list of unique device IDs that exist in the database.
-        This is useful for discovering which devices are currently active.
-        """
-    )
-    def get(self):
-        """Get list of all devices"""
-        devices = db.session.query(Measurement.device_id).distinct().all()
-        device_list = [d[0] for d in devices]
-
-        return {
-            "count": len(device_list),
-            "devices": device_list
-        }
-
-
-@api.route("/devices/<string:device_id>/latest")
-class DeviceLatest(Resource):
-    @api.doc(
-        description="""
-        **Get the latest measurement of a specific device**
-
-        Returns the most recent measurement received from the given device.
-        Useful for dashboards, monitoring, or checking the current status of a device.
-        """,
-        params={
-            "device_id": "The unique ID of the device (example: device_001)"
-        },
-        responses={
-            200: "Latest measurement returned successfully",
-            404: "No measurements found for this device"
-        }
-    )
-    def get(self, device_id):
-        """Get the most recent measurement of a device"""
-        measurement = (Measurement.query
-                       .filter_by(device_id=device_id)
-                       .order_by(Measurement.server_unix_time.desc())
-                       .first())
-
-        if not measurement:
-            api.abort(404, f"No measurements found for device '{device_id}'")
-
-        return {
-            "id": measurement.id,
-            "device_id": measurement.device_id,
-            "sensor_type": measurement.sensor_type,
-            "device_unix_time": measurement.device_unix_time,
-            "device_local_time": measurement.device_local_time,
-            "server_unix_time": measurement.server_unix_time,
-            "server_local_time": measurement.server_local_time,
-            "data": measurement.data
-        }
-
-
-@api.route("/measurements/<int:measurement_id>")
-class MeasurementDetail(Resource):
-    @api.doc(
-        description="""
-        **Delete a specific measurement**
-
-        Permanently deletes one measurement from the database using its ID.
-
-        Use this endpoint with caution. Deleted data cannot be recovered.
-        """,
-        params={
-            "measurement_id": "The ID of the measurement you want to delete"
-        },
-        responses={
-            200: "Measurement deleted successfully",
-            404: "Measurement not found"
-        }
-    )
-    def delete(self, measurement_id):
-        """Delete a single measurement by ID"""
-        measurement = Measurement.query.get(measurement_id)
-
-        if not measurement:
-            api.abort(404, f"Measurement with ID {measurement_id} not found")
-
-        db.session.delete(measurement)
-        db.session.commit()
-
-        return {
-            "message": f"Measurement {measurement_id} deleted successfully"
-        }, 200
 
 
 @api.route("/devices/<string:device_id>/data")
 class DeviceData(Resource):
-    @api.doc(
-        description="""
-        **Delete all measurements of a device**
-
-        Permanently deletes **all** measurements that belong to the given device.
-
-        This action is irreversible. Use it carefully (for example when resetting a device or cleaning test data).
-        """,
-        params={
-            "device_id": "The unique ID of the device whose data should be deleted"
-        },
-        responses={
-            200: "All measurements of the device deleted",
-            404: "Device has no measurements"
-        }
-    )
+    @api.doc(description="Delete all measurements of a specific device")
     def delete(self, device_id):
-        """Delete all measurements of a specific device"""
+        """Delete all measurements of a device"""
         deleted_count = Measurement.query.filter_by(device_id=device_id).delete()
         db.session.commit()
 
         if deleted_count == 0:
             api.abort(404, f"No measurements found for device '{device_id}'")
 
-        return {
-            "message": f"Successfully deleted {deleted_count} measurements for device '{device_id}'"
-        }, 200
+        return {"message": f"Successfully deleted {deleted_count} measurements for device '{device_id}'"}, 200
+
+
 # ---------- Web Pages ----------
 @app.route("/")
 def index():
@@ -403,13 +366,12 @@ def index():
 
 @app.route("/devices")
 def list_devices():
-    devices = db.session.query(Measurement.device_id).distinct().all()
-    device_list = [d[0] for d in devices]
-    return render_template("devices.html", devices=device_list, version=APP_VERSION)
+    devices = Device.query.order_by(Device.created_at.desc()).all()
+    return render_template("devices.html", devices=devices, version=APP_VERSION)
 
 
 @app.route("/devices/<device_id>")
-def device_detail(device_id):
+def device_dashboard(device_id):
     return render_template("device_detail.html", device_id=device_id, version=APP_VERSION)
 
 
