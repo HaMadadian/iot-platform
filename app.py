@@ -19,7 +19,13 @@ auth = HTTPBasicAuth()
 APP_VERSION = "0.2.0"
 
 # ---------- Database ----------
-app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///iot.db"
+database_url = os.getenv("DATABASE_URL")
+
+# Render sometimes gives postgres:// — SQLAlchemy needs postgresql://
+if database_url and database_url.startswith("postgres://"):
+    database_url = database_url.replace("postgres://", "postgresql://", 1)
+
+app.config["SQLALCHEMY_DATABASE_URI"] = database_url or "sqlite:///iot.db"
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 db = SQLAlchemy(app)
 
