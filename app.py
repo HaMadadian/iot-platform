@@ -263,10 +263,15 @@ class DevicePlotData(Resource):
     @api.doc(description="Get data for the real-time temperature plot")
     def get(self, device_id):
         """Data for the interactive real-time plot"""
-        day_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        # device_local_time is the device's calendar time, so use a bounded
+        # date range instead of comparing device Unix time with server time.
+        today = datetime.now().strftime("%Y-%m-%d")
+        device_day_start = f"{today} 00:00:00"
+        device_day_end = f"{today} 23:59:59"
         measurements = (Measurement.query
                         .filter_by(device_id=device_id)
-                        .filter(Measurement.device_unix_time >= int(day_start.timestamp()))
+                .filter(Measurement.device_local_time >= device_day_start)
+                .filter(Measurement.device_local_time <= device_day_end)
                         .order_by(Measurement.device_unix_time.desc())
                         .all())
 
