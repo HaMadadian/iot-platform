@@ -240,7 +240,7 @@ class DeviceLatest(Resource):
         """Get the most recent measurement of a device"""
         measurement = (Measurement.query
                        .filter_by(device_id=device_id)
-                       .order_by(Measurement.server_unix_time.desc())
+                       .order_by(Measurement.device_unix_time.desc())
                        .first())
 
         if not measurement:
@@ -263,10 +263,11 @@ class DevicePlotData(Resource):
     @api.doc(description="Get data for the real-time temperature plot")
     def get(self, device_id):
         """Data for the interactive real-time plot"""
+        day_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
         measurements = (Measurement.query
                         .filter_by(device_id=device_id)
-                        .order_by(Measurement.server_unix_time.desc())
-                        .limit(100)
+                        .filter(Measurement.device_local_time >= day_start)
+                        .order_by(Measurement.device_unix_time.desc())
                         .all())
 
         measurements = list(reversed(measurements))
@@ -278,7 +279,7 @@ class DevicePlotData(Resource):
         for m in measurements:
             temp = get_temperature(m)
             if temp is not None:
-                times.append(m.server_local_time)
+                times.append(m.device_local_time)
                 values.append(temp)
                 hover_texts.append(
                     f"Device: {m.device_id}<br>"
