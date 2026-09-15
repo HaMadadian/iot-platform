@@ -266,7 +266,7 @@ class DevicePlotData(Resource):
         day_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
         measurements = (Measurement.query
                         .filter_by(device_id=device_id)
-                        .filter(Measurement.device_local_time >= day_start)
+                        .filter(Measurement.device_unix_time >= int(day_start.timestamp()))
                         .order_by(Measurement.device_unix_time.desc())
                         .all())
 
